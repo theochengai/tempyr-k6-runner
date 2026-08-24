@@ -6,6 +6,7 @@ on:
       target_url:
         description: Public HTTP(S) endpoint to smoke test
         required: true
+        default: https://quickpizza.grafana.com/api/get
         type: string
 
 permissions:
