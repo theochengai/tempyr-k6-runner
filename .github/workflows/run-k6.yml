@@ -1,4 +1,5 @@
 name: Run k6
+run-name: "PerfTest ${{ inputs.run_id || 'manual smoke' }}"
 
 on:
   workflow_dispatch:
