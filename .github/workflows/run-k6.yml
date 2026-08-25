@@ -56,12 +56,4 @@ jobs:
           PERF_CLOUDFLARE_API_BASE: ${{ secrets.PERF_CLOUDFLARE_API_BASE }}
           PERF_RUNNER_TOKEN: ${{ secrets.PERF_RUNNER_TOKEN }}
           PERF_RUN_ID: ${{ inputs.run_id }}
-          K6_OUT: experimental-prometheus-rw
-          K6_TAGS: "testid:${{ inputs.run_id }}"
-          K6_SYSTEM_TAGS: "proto,status,method,group,check,error,error_code,tls_version,scenario,expected_response"
-          K6_PROMETHEUS_RW_SERVER_URL: ${{ secrets.K6_PROMETHEUS_RW_SERVER_URL }}
-          K6_PROMETHEUS_RW_USERNAME: ${{ secrets.K6_PROMETHEUS_RW_USERNAME }}
-          K6_PROMETHEUS_RW_PASSWORD: ${{ secrets.K6_PROMETHEUS_RW_PASSWORD }}
-          K6_PROMETHEUS_RW_TREND_STATS: "p(95),p(99)"
-          K6_PROMETHEUS_RW_STALE_MARKERS: "true"
         run: node runner/cloudflare-k6-runner.mjs --run-id "$PERF_RUN_ID"
