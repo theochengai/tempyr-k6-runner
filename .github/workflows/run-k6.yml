@@ -53,7 +53,26 @@ jobs:
         if: ${{ inputs.run_id != '' }}
         working-directory: perftest-src
         env:
-          PERF_CLOUDFLARE_API_BASE: ${{ secrets.PERF_CLOUDFLARE_API_BASE }}
+          PERF_CLOUDFLARE_API_BASE: https://tempyr.perftest.workers.dev
           PERF_RUNNER_TOKEN: ${{ secrets.PERF_RUNNER_TOKEN }}
           PERF_RUN_ID: ${{ inputs.run_id }}
         run: node runner/cloudflare-k6-runner.mjs --run-id "$PERF_RUN_ID"
+
+      - name: Report PerfTest provider failure
+        if: ${{ failure() && inputs.run_id != '' }}
+        continue-on-error: true
+        env:
+          PERF_CLOUDFLARE_API_BASE: https://tempyr.perftest.workers.dev
+          PERF_RUNNER_TOKEN: ${{ secrets.PERF_RUNNER_TOKEN }}
+          PERF_RUN_ID: ${{ inputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          API_BASE="${PERF_CLOUDFLARE_API_BASE%/}/api/v1"
+          curl --fail-with-body --silent --show-error \
+            --retry 3 --retry-all-errors \
+            -X POST \
+            -H "Authorization: Bearer ${PERF_RUNNER_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data '{"summary":"GitHub Actions execution provider failed before successful completion"}' \
+            "${API_BASE}/internal/execution-jobs/${PERF_RUN_ID}/provider-failed"
