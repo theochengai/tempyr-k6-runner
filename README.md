@@ -1,8 +1,8 @@
 # Tempyr k6 Runner
 
-Public, generic k6 execution host for Tempyr.
+Public, generic k6 execution host for Tempyr. Customers fork this repository and connect their fork from Tempyr Project Settings.
 
-This repository intentionally contains no Tempyr application source code, customer test data, target credentials, or long-lived secrets in source control.
+This repository intentionally contains no Tempyr application source code, customer test data, target credentials, or long-lived Tempyr secrets in source control.
 
 ## Manual smoke mode
 
@@ -16,29 +16,36 @@ The workflow performs a deliberately small 1-VU, 10-second smoke test. QuickPizz
 
 ## Tempyr-dispatched mode
 
-Tempyr keeps durable Run and queue state in D1. Its Cloudflare dispatcher starts this workflow with a specific `run_id`.
+Tempyr keeps durable Run and queue state in D1. A Project connects one verified fork of this repository. When a Run is accepted, Tempyr freezes that Project runner binding into the execution job and dispatches the connected fork.
 
-For the POC, the workflow then:
+The workflow receives only:
+
+- `run_id` — the exact Tempyr Run to execute.
+- `execution_token` — a short-lived Tempyr credential scoped to that Run, Project, Workspace, and verified runner repository.
+
+The fork then executes its own public runner client:
 
 ```text
-run_id
+run_id + short-lived execution_token
   ↓
-checkout private tempyr execution source (read-only token)
+claim that exact Run from Tempyr
   ↓
-claim that exact Run from the deployed Tempyr Worker
+receive the frozen execution plan
   ↓
-prepare + execute k6
+resolve runtime-only Environment values after the execution lease is valid
   ↓
-heartbeat lease
+compile + execute k6 inside this GitHub-hosted runner
   ↓
-post terminal metrics/findings/result back to Tempyr
+heartbeat lease and publish phase progress
+  ↓
+post terminal metrics/raw summary back to Tempyr
 ```
 
 Run-specific claim is authoritative before any target traffic is generated. If an at-least-once dispatch causes a duplicate workflow to start, only the workflow that acquires the valid D1 execution lease can execute the Run.
 
 Tempyr's authenticated completion callback and D1/R2 state remain authoritative for Run status and persisted reports.
 
-The generated Tempyr k6 script emits frozen authored-request tags such as:
+The generated k6 script emits frozen authored-request tags such as:
 
 ```text
 pt_step_id
@@ -48,38 +55,51 @@ pt_method
 pt_path
 ```
 
-These tags preserve the immutable authored API identity frozen into each Run and are available to the native Tempyr result pipeline without depending on resolved runtime URLs.
+These tags preserve the immutable authored API identity frozen into each Run without depending on resolved runtime URLs.
 
-## Required repository secrets for dispatched runs
+## No customer repository secrets required
 
-Configure these Actions repository secrets on `theochengai/tempyr-k6-runner`:
+A connected fork does **not** need any of the old Tempyr bootstrap secrets:
 
-- `PERFTEST_SOURCE_TOKEN` — fine-grained GitHub token with **Contents: Read-only** access to `theochengai/tempyr` only.
-- `PERF_CLOUDFLARE_API_BASE` — deployed Tempyr Worker/application URL. The runner normalizes it to `/api/v1`.
-- `PERF_RUNNER_TOKEN` — shared secret that matches the Worker `PERF_RUNNER_TOKEN` secret.
+- no `PERFTEST_SOURCE_TOKEN`
+- no shared `PERF_RUNNER_TOKEN`
+- no GitHub token for the private `theochengai/tempyr` application repository
 
-The workflow is only triggered by `workflow_dispatch`; it does not run on pull requests, so public fork/PR code cannot automatically receive these secrets.
+Tempyr's GitHub App gets short-lived Actions access to the connected fork at dispatch time. The workflow receives a separate short-lived execution credential as a workflow input and masks it before execution. The credential expires automatically and cannot authorize another Run or another runner repository.
 
-## Tempyr Worker dispatch configuration
+Do not echo or persist the `execution_token` in workflow logs or artifacts.
 
-The deployed Tempyr Worker needs:
+## Connecting a fork
 
-- `PERF_GITHUB_ACTIONS_TOKEN` — fine-grained token scoped to this public runner repository with **Actions: Read and write** permission.
-- `PERF_RUNNER_TOKEN` — same runner API secret configured above.
+1. Fork `theochengai/tempyr-k6-runner` into the GitHub account or organization that should own execution.
+2. Keep `.github/workflows/run-k6.yml` enabled on the fork.
+3. In Tempyr, open the Project's settings and find **Execution Runner**.
+4. Enter the fork as `owner/repo` and continue to GitHub.
+5. Install/authorize the Tempyr GitHub App for that repository.
 
-Optional Worker variables:
+Tempyr verifies that the selected repository is a fork of this canonical runner and that the App installation can access it. The canonical Tempyr-owned runner itself is not accepted as a customer Project runner.
 
-- `PERF_MAX_CONCURRENT_RUNS` — Tempyr execution capacity. Current default: **5**.
-- `PERF_GITHUB_ACTIONS_REPOSITORY` — defaults to `theochengai/tempyr-k6-runner`.
-- `PERF_GITHUB_ACTIONS_WORKFLOW` — defaults to `run-k6.yml`.
-- `PERF_GITHUB_ACTIONS_REF` — defaults to `main`.
-- `PERF_DISPATCH_LEASE_SECONDS` — short reservation lease before GitHub accepts a dispatch.
-- `PERF_PROVIDER_START_TIMEOUT_SECONDS` — how long a dispatched workflow may wait before the job is eligible for recovery.
+## Tempyr service configuration
 
-## Native time-series direction
+The Tempyr deployment owns the GitHub App credentials. Customer forks do not receive or store them.
 
-Tempyr is moving to a first-party time-series path. The external runner will produce temporary k6 metric samples, normalize the small subset required by the product, and send/persist those normalized results through Tempyr's own artifact boundary. Grafana Cloud Prometheus Remote Write is not part of the active POC runner contract.
+The Tempyr service requires, when runner connections are enabled:
 
-## Future hardening
+- `GITHUB_APP_CLIENT_ID`
+- `GITHUB_APP_SLUG`
+- `GITHUB_APP_CLIENT_SECRET`
+- `GITHUB_APP_PRIVATE_KEY`
 
-The private source checkout is an MVP bootstrap. A productized runner should consume a versioned standalone runner package or short-lived executable bundle instead of checking out the private application repository.
+The App should have the minimum repository permissions needed by the integration: read repository contents/metadata and dispatch/read Actions runs. Tempyr mints repository-scoped installation tokens on demand and does not persist them.
+
+Optional execution variables remain service-owned, such as concurrency, dispatch lease, provider-start timeout, workflow name, and workflow ref.
+
+## Compatibility and trust boundary
+
+The old global runner token remains a Tempyr internal compatibility path during migration, but customer-owned forks do not use it. For a dispatched customer Run, Tempyr validates the short-lived credential against the durable `RunExecutionJob` before exposing the execution plan or runtime Environment credentials.
+
+The Cloudflare Worker never runs k6. It owns authorization, Run state, snapshot/materialization, leases, and persistence; the connected GitHub-hosted runner owns actual k6 process execution.
+
+## Current result pipeline
+
+The standalone runner posts the k6 summary and normalized top-level metric summary back to Tempyr. Tempyr builds the persisted Run report from that evidence. Native first-party time-series normalization can continue to evolve independently without reintroducing private source checkout into customer forks.
