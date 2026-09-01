@@ -1,0 +1,27 @@
+name: Validate Tempyr branding
+
+on:
+  push:
+    branches:
+      - chore/tempyr-branding
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check runner syntax
+        run: node --check runner/run.mjs
+      - name: Check renamed repository references
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R -n -E 'theochengai/perftest_poc|theochengai/perftest-k6-runner|PerfTest|perftest-k6-' README.md .github/workflows/run-k6.yml runner/run.mjs
+          grep -q 'repository: theochengai/tempyr' .github/workflows/run-k6.yml
+          grep -q 'path: tempyr-src' .github/workflows/run-k6.yml
+          grep -q 'working-directory: tempyr-src' .github/workflows/run-k6.yml
