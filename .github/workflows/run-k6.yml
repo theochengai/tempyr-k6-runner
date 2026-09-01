@@ -1,11 +1,11 @@
 name: Run k6
-run-name: "PerfTest ${{ inputs.run_id || 'manual smoke' }}"
+run-name: "Tempyr ${{ inputs.run_id || 'manual smoke' }}"
 
 on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: PerfTest Run ID for automatic execution
+        description: Tempyr Run ID for automatic execution
         required: false
         default: ""
         type: string
@@ -39,26 +39,26 @@ jobs:
           PERF_TARGET_URL: ${{ inputs.target_url }}
         run: node runner/run.mjs
 
-      - name: Checkout PerfTest execution source
+      - name: Checkout Tempyr execution source
         if: ${{ inputs.run_id != '' }}
         uses: actions/checkout@v4
         with:
-          repository: theochengai/perftest_poc
+          repository: theochengai/tempyr
           ref: main
           token: ${{ secrets.PERFTEST_SOURCE_TOKEN }}
           persist-credentials: false
-          path: perftest-src
+          path: tempyr-src
 
-      - name: Execute PerfTest run
+      - name: Execute Tempyr run
         if: ${{ inputs.run_id != '' }}
-        working-directory: perftest-src
+        working-directory: tempyr-src
         env:
           PERF_CLOUDFLARE_API_BASE: https://tempyr.perftest.workers.dev
           PERF_RUNNER_TOKEN: ${{ secrets.PERF_RUNNER_TOKEN }}
           PERF_RUN_ID: ${{ inputs.run_id }}
         run: node runner/cloudflare-k6-runner.mjs --run-id "$PERF_RUN_ID"
 
-      - name: Report PerfTest provider failure
+      - name: Report Tempyr provider failure
         if: ${{ failure() && inputs.run_id != '' }}
         continue-on-error: true
         env:
