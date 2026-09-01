@@ -18,7 +18,7 @@ if (!new Set(["http:", "https:"]).has(parsed.protocol)) {
   throw new Error("PERF_TARGET_URL must use http or https");
 }
 
-const workdir = await mkdtemp(join(tmpdir(), "perftest-k6-"));
+const workdir = await mkdtemp(join(tmpdir(), "tempyr-k6-"));
 const scriptPath = join(workdir, "smoke.js");
 
 const script = `
@@ -35,7 +35,7 @@ export const options = {
 
 export default function () {
   const response = http.get(__ENV.TARGET_URL, {
-    tags: { source: "perftest-k6-runner-smoke" }
+    tags: { source: "tempyr-k6-runner-smoke" }
   });
   check(response, {
     "status is 2xx": (r) => r.status >= 200 && r.status < 300
