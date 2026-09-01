@@ -9,6 +9,11 @@ on:
         required: false
         default: ""
         type: string
+      execution_token:
+        description: Short-lived Tempyr execution credential
+        required: false
+        default: ""
+        type: string
       target_url:
         description: Public HTTP(S) endpoint for manual smoke testing
         required: false
@@ -27,8 +32,7 @@ jobs:
       - name: Setup k6
         uses: grafana/setup-k6-action@v1
 
-      - name: Checkout public smoke runner
-        if: ${{ inputs.run_id == '' }}
+      - name: Checkout runner
         uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -39,40 +43,46 @@ jobs:
           PERF_TARGET_URL: ${{ inputs.target_url }}
         run: node runner/run.mjs
 
-      - name: Checkout Tempyr execution source
+      - name: Validate Tempyr dispatch inputs
         if: ${{ inputs.run_id != '' }}
-        uses: actions/checkout@v4
-        with:
-          repository: theochengai/tempyr
-          ref: main
-          token: ${{ secrets.PERFTEST_SOURCE_TOKEN }}
-          persist-credentials: false
-          path: tempyr-src
+        env:
+          TEMPYR_EXECUTION_TOKEN: ${{ inputs.execution_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TEMPYR_EXECUTION_TOKEN}" ]; then
+            echo "Tempyr execution token is required for automatic execution" >&2
+            exit 1
+          fi
+          echo "::add-mask::${TEMPYR_EXECUTION_TOKEN}"
 
       - name: Execute Tempyr run
         if: ${{ inputs.run_id != '' }}
-        working-directory: tempyr-src
         env:
-          PERF_CLOUDFLARE_API_BASE: https://tempyr.perftest.workers.dev
-          PERF_RUNNER_TOKEN: ${{ secrets.PERF_RUNNER_TOKEN }}
-          PERF_RUN_ID: ${{ inputs.run_id }}
-        run: node runner/cloudflare-k6-runner.mjs --run-id "$PERF_RUN_ID"
+          TEMPYR_API_BASE: https://tempyr.perftest.workers.dev
+          TEMPYR_EXECUTION_TOKEN: ${{ inputs.execution_token }}
+          TEMPYR_RUN_ID: ${{ inputs.run_id }}
+        run: node runner/tempyr-run.mjs
 
       - name: Report Tempyr provider failure
         if: ${{ failure() && inputs.run_id != '' }}
         continue-on-error: true
         env:
-          PERF_CLOUDFLARE_API_BASE: https://tempyr.perftest.workers.dev
-          PERF_RUNNER_TOKEN: ${{ secrets.PERF_RUNNER_TOKEN }}
-          PERF_RUN_ID: ${{ inputs.run_id }}
+          TEMPYR_API_BASE: https://tempyr.perftest.workers.dev
+          TEMPYR_EXECUTION_TOKEN: ${{ inputs.execution_token }}
+          TEMPYR_RUN_ID: ${{ inputs.run_id }}
         shell: bash
         run: |
           set -euo pipefail
-          API_BASE="${PERF_CLOUDFLARE_API_BASE%/}/api/v1"
+          if [ -z "${TEMPYR_EXECUTION_TOKEN}" ]; then
+            exit 0
+          fi
+          echo "::add-mask::${TEMPYR_EXECUTION_TOKEN}"
+          API_BASE="${TEMPYR_API_BASE%/}/api/v1"
           curl --fail-with-body --silent --show-error \
             --retry 3 --retry-all-errors \
             -X POST \
-            -H "Authorization: Bearer ${PERF_RUNNER_TOKEN}" \
+            -H "Authorization: Bearer ${TEMPYR_EXECUTION_TOKEN}" \
             -H "Content-Type: application/json" \
             --data '{"summary":"GitHub Actions execution provider failed before successful completion"}' \
-            "${API_BASE}/internal/execution-jobs/${PERF_RUN_ID}/provider-failed"
+            "${API_BASE}/internal/execution-jobs/${TEMPYR_RUN_ID}/provider-failed"
