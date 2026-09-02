@@ -17,16 +17,10 @@ export function renderTestPlanK6Script({
       exec: `scenario_${scenarioIndex}`
     }, null, 2)}`;
   }).join(",\n    ");
-  const thresholdEntries = scenarios.flatMap((entry, scenarioIndex) => {
-    const key = scenarioKey(entry, scenarioIndex);
-    const thresholds = entry.workload?.config?.thresholds || { p95Ms: 3000, errorRate: 0.05 };
-    return [
-      `${JSON.stringify(`http_req_failed{scenario:${key}}`)}: [{ threshold: "rate<${thresholds.errorRate ?? 0.05}", abortOnFail: true, delayAbortEval: "2s" }]`,
-      `${JSON.stringify(`http_req_duration{scenario:${key}}`)}: [{ threshold: "p(95)<${thresholds.p95Ms ?? 3000}", abortOnFail: true, delayAbortEval: "2s" }]`,
-      ...stepMetricThresholds(entry),
-      ...tagMetricThresholds(entry)
-    ];
-  }).join(",\n    ");
+  const thresholdEntries = scenarios.flatMap((entry) => [
+    ...stepMetricThresholds(entry),
+    ...tagMetricThresholds(entry)
+  ]).join(",\n    ");
   const datasetDefinitions = scenarios.flatMap((entry, scenarioIndex) =>
     (entry.datasets || []).map((dataset, datasetIndex) =>
       `const DATASET_${scenarioIndex}_${datasetIndex} = new SharedArray(${JSON.stringify(`${entry.scenario?.name || `Scenario ${scenarioIndex + 1}`} · ${dataset.fileName}`)}, () => JSON.parse(open(${JSON.stringify(dataset.dataFile)})));`
