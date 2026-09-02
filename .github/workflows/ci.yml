@@ -29,6 +29,7 @@ jobs:
           node --check runner/run.mjs
           node --check runner/tempyr-run.mjs
           node --check runner/k6-scenario-script-renderer.mjs
+          node --check runner/run-time-series.mjs
 
       - name: Run runner contract tests
         run: node --test test/*.test.mjs
