@@ -29,3 +29,14 @@ test("runner reports terminal state through the authenticated execution job boun
   assert.match(client, /lease_token: job\.leaseToken/);
   assert.match(client, /authorization: `Bearer \$\{executionToken\}`/);
 });
+
+test("runner captures and uploads native time-series evidence before successful completion", () => {
+  assert.match(client, /normalizeK6JsonOutput/);
+  assert.match(client, /"--out"/);
+  assert.match(client, /`json=\$\{prepared\.samplePath\}`/);
+  assert.match(
+    client,
+    /await safelyUploadTimeSeries\([\s\S]*?await tempyrApi\(`\/internal\/execution-jobs\/\$\{encodeURIComponent\(runId\)\}\/complete`/,
+  );
+  assert.match(client, /time_series_artifact: artifact/);
+});

@@ -38,6 +38,8 @@ compile + execute k6 inside this GitHub-hosted runner
   ↓
 heartbeat lease and publish phase progress
   ↓
+normalize and upload native time-series evidence
+  ↓
 post terminal metrics/raw summary back to Tempyr
 ```
 
@@ -102,4 +104,6 @@ The Cloudflare Worker never runs k6. It owns authorization, Run state, snapshot/
 
 ## Current result pipeline
 
-The standalone runner posts the k6 summary and normalized top-level metric summary back to Tempyr. Tempyr builds the persisted Run report from that evidence. Native first-party time-series normalization can continue to evolve independently without reintroducing private source checkout into customer forks.
+The standalone runner writes k6's JSON metric stream to a temporary local file, reduces the supported request/tag metrics into 5-second native Tempyr buckets, and uploads the bounded `time-series.v1` artifact while its Run lease is still valid. It then posts the k6 summary and normalized top-level metric summary back to Tempyr. Tempyr persists the time-series artifact in R2 and builds the aggregate Run report from the summary evidence.
+
+Time-series normalization is best-effort: a missing or invalid time-series artifact does not discard an otherwise valid aggregate Run result. Temporary raw k6 sample output is deleted with the runner's working directory after the Run finishes.

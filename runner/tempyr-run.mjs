@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { buildTestPlanVariableEnvironment, renderTestPlanK6Script } from "./k6-scenario-script-renderer.mjs";
+import { normalizeK6JsonOutput } from "./run-time-series.mjs";
 
 const runId = String(process.env.TEMPYR_RUN_ID || "").trim();
 const executionToken = String(process.env.TEMPYR_EXECUTION_TOKEN || "").trim();
@@ -99,6 +100,7 @@ async function executeClaimedRun() {
   await setSubtask("processing_results", "build-findings-and-report");
   await setSubtask("processing_results", "persist-final-results");
 
+  await safelyUploadTimeSeries(outcome.timeSeriesArtifact, outcome.timeSeriesError);
   await tempyrApi(`/internal/execution-jobs/${encodeURIComponent(runId)}/complete`, {
     method: "POST",
     body: {
@@ -154,8 +156,9 @@ async function prepareExecution(executionPlan, runtime) {
   if (executionPlan.executionMode === "validation") script = applyValidationWorkload(script, plan);
   const scriptPath = join(dir, "script.js");
   const summaryPath = join(dir, "summary.json");
+  const samplePath = join(dir, "samples.jsonl");
   await writeFile(scriptPath, script, "utf8");
-  return { artifactDir: dir, scriptPath, summaryPath, plan };
+  return { artifactDir: dir, scriptPath, summaryPath, samplePath, plan };
 }
 
 function applyValidationWorkload(baseScript, plan) {
@@ -190,6 +193,8 @@ async function runK6(prepared, runtime) {
       prepared.summaryPath,
       "--summary-trend-stats",
       trendStats,
+      "--out",
+      `json=${prepared.samplePath}`,
     ], { env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
@@ -204,25 +209,66 @@ async function runK6(prepared, runtime) {
   });
 }
 
-async function buildOutcome(prepared, result) {
+async function buildOutcome(prepared, result, startedAt, endedAt) {
   let summary = { metrics: {} };
   try { summary = JSON.parse(await readFile(prepared.summaryPath, "utf8")); } catch { /* k6 can fail before export */ }
   const metricSummary = buildMetricSummary(summary, prepared.plan.testPlan?.planType);
+  const timeSeries = await buildTimeSeries(prepared, startedAt, endedAt);
   const output = `${result.stdout || ""}\n${result.stderr || ""}`;
-  if (result.timedOut) return outcome("stopped_by_guardrail", "k6_timeout", "k6 was stopped because it exceeded the guardrail execution timeout", metricSummary, summary);
-  if (result.code !== 0 && /threshold/i.test(result.stderr || "")) return outcome("stopped_by_guardrail", "k6_threshold_abort", "k6 stopped early because configured latency or error thresholds were crossed", metricSummary, summary);
-  if (result.code !== 0 && /DATASET_EXHAUSTED/.test(output)) return outcome("failed", "dataset_exhausted", "Prepared execution could not continue because a dataset ran out of rows", metricSummary, summary);
-  if (result.code !== 0 && /ENVIRONMENT_TARGET_MISSING/.test(output)) return outcome("failed", "prepared_target_missing", "Prepared execution referenced an Environment target that was not available at runtime", metricSummary, summary);
-  if (result.code !== 0) return outcome("failed", "k6_failed", "k6 execution failed before producing a successful engine completion", metricSummary, summary);
+  if (result.timedOut) return outcome("stopped_by_guardrail", "k6_timeout", "k6 was stopped because it exceeded the guardrail execution timeout", metricSummary, summary, timeSeries);
+  if (result.code !== 0 && /threshold/i.test(result.stderr || "")) return outcome("stopped_by_guardrail", "k6_threshold_abort", "k6 stopped early because configured latency or error thresholds were crossed", metricSummary, summary, timeSeries);
+  if (result.code !== 0 && /DATASET_EXHAUSTED/.test(output)) return outcome("failed", "dataset_exhausted", "Prepared execution could not continue because a dataset ran out of rows", metricSummary, summary, timeSeries);
+  if (result.code !== 0 && /ENVIRONMENT_TARGET_MISSING/.test(output)) return outcome("failed", "prepared_target_missing", "Prepared execution referenced an Environment target that was not available at runtime", metricSummary, summary, timeSeries);
+  if (result.code !== 0) return outcome("failed", "k6_failed", "k6 execution failed before producing a successful engine completion", metricSummary, summary, timeSeries);
   const name = prepared.plan.testPlan?.name || "Test Plan";
   const text = prepared.plan.executionMode === "validation"
     ? `Validation completed for ${name}`
     : `Test Plan ${name} completed across ${(prepared.plan.scenarios || []).length} Scenario${(prepared.plan.scenarios || []).length === 1 ? "" : "s"}`;
-  return outcome("completed", "completed", text, metricSummary, summary);
+  return outcome("completed", "completed", text, metricSummary, summary, timeSeries);
 }
 
-function outcome(status, stopReason, summary, metricSummary, rawArtifact) {
-  return { status, stopReason, summary, metricSummary, rawArtifact };
+async function buildTimeSeries(prepared, startedAt, endedAt) {
+  try {
+    const normalized = await normalizeK6JsonOutput({
+      inputPath: prepared.samplePath,
+      runId,
+      startedAt,
+      endedAt,
+    });
+    return {
+      timeSeriesArtifact: normalized.artifact,
+      timeSeriesDiagnostics: normalized.diagnostics,
+      timeSeriesError: null,
+    };
+  } catch (error) {
+    return {
+      timeSeriesArtifact: null,
+      timeSeriesDiagnostics: null,
+      timeSeriesError: safeMessage(error),
+    };
+  }
+}
+
+async function safelyUploadTimeSeries(artifact, normalizationError) {
+  if (!artifact) {
+    if (normalizationError) console.error(`time-series unavailable for ${runId}: ${normalizationError}`);
+    return;
+  }
+  try {
+    await tempyrApi(`/internal/execution-jobs/${encodeURIComponent(runId)}/time-series`, {
+      method: "POST",
+      body: {
+        lease_token: job.leaseToken,
+        time_series_artifact: artifact,
+      },
+    });
+  } catch (error) {
+    console.error(`failed to persist time-series artifact for ${runId}: ${safeMessage(error)}`);
+  }
+}
+
+function outcome(status, stopReason, summary, metricSummary, rawArtifact, extra = {}) {
+  return { status, stopReason, summary, metricSummary, rawArtifact, ...extra };
 }
 
 function buildMetricSummary(summary, planType) {
