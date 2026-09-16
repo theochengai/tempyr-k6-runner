@@ -28,6 +28,7 @@ jobs:
         run: |
           node --check runner/run.mjs
           node --check runner/tempyr-run.mjs
+          node --check runner/engine-artifact.mjs
           node --check runner/k6-scenario-script-renderer.mjs
           node --check runner/run-time-series.mjs
 
