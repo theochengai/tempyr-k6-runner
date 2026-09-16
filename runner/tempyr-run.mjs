@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { materializeK6EngineArtifact } from "./engine-artifact.mjs";
 import { buildTestPlanVariableEnvironment, renderTestPlanK6Script } from "./k6-scenario-script-renderer.mjs";
 import { normalizeK6JsonOutput } from "./run-time-series.mjs";
 
@@ -64,8 +65,8 @@ try {
 }
 
 async function executeClaimedRun() {
-  if (!job.executionPlan?.scenarios?.length || !job.executionSnapshot) {
-    throw new Error("Claimed job does not contain a frozen execution snapshot and materialized execution plan");
+  if (!job.executionSnapshot || (!job.engineArtifact && !job.executionPlan?.scenarios?.length)) {
+    throw new Error("Claimed job does not contain a frozen execution snapshot and executable EngineArtifact or legacy execution plan");
   }
 
   const runtime = await tempyrApi(`/internal/execution-jobs/${encodeURIComponent(runId)}/runtime-environment`, {
@@ -76,7 +77,9 @@ async function executeClaimedRun() {
   if (!runtimeEnvironment) throw new Error("Authorized runtime Environment values were not returned");
 
   await setSubtask("preparing", "compile-executable-test");
-  const prepared = await prepareExecution(job.executionPlan, runtimeEnvironment);
+  const prepared = job.engineArtifact
+    ? await prepareEngineExecution(job.engineArtifact, job.executionPlan, runtimeEnvironment)
+    : await prepareExecution(job.executionPlan, runtimeEnvironment);
   artifactDir = prepared.artifactDir;
 
   await setPhase("ready");
@@ -115,6 +118,37 @@ async function executeClaimedRun() {
   });
   await writeStepSummary(outcome, prepared.plan);
   if (outcome.status === "failed") process.exitCode = 1;
+}
+
+async function prepareEngineExecution(engineArtifact, executionPlan, runtime) {
+  const dir = await mkdtemp(join(tmpdir(), "tempyr-k6-"));
+  const materialized = await materializeK6EngineArtifact({
+    artifact: engineArtifact,
+    runtimeEnvironment: runtime,
+    artifactDir: dir,
+  });
+  const manifest = materialized.manifest || {};
+  const scenarioCount = Number(manifest.scenarioCount || executionPlan?.scenarios?.length || 0);
+  const plan = executionPlan || {
+    executionMode: manifest.executionMode || "full",
+    guardrail: {},
+    testPlan: manifest.testPlan || null,
+    scenarios: Array.from({ length: Math.max(0, scenarioCount) }, () => ({})),
+  };
+  return {
+    artifactDir: dir,
+    scriptPath: materialized.scriptPath,
+    summaryPath: join(dir, "summary.json"),
+    samplePath: join(dir, "samples.jsonl"),
+    plan: {
+      ...plan,
+      executionMode: manifest.executionMode || plan.executionMode || "full",
+      testPlan: plan.testPlan || manifest.testPlan || null,
+    },
+    runtimeEnv: materialized.runtimeEnv,
+    timeoutMs: materialized.timeoutMs,
+    engineArtifact,
+  };
 }
 
 async function prepareExecution(executionPlan, runtime) {
@@ -176,15 +210,16 @@ function applyValidationWorkload(baseScript, plan) {
 }
 
 async function runK6(prepared, runtime) {
+  const runtimeEnv = prepared.runtimeEnv || buildTestPlanVariableEnvironment(prepared.plan.scenarios || [], {
+    ...prepared.plan.environment,
+    secrets: runtime.secrets || {},
+    authValues: runtime.authValues || { headers: [], cookies: [] },
+  });
   const env = {
     ...process.env,
-    ...buildTestPlanVariableEnvironment(prepared.plan.scenarios || [], {
-      ...prepared.plan.environment,
-      secrets: runtime.secrets || {},
-      authValues: runtime.authValues || { headers: [], cookies: [] },
-    }),
+    ...runtimeEnv,
   };
-  const timeoutMs = executionTimeoutMs(prepared.plan);
+  const timeoutMs = Number(prepared.timeoutMs) > 0 ? Number(prepared.timeoutMs) : executionTimeoutMs(prepared.plan);
   return new Promise((resolve, reject) => {
     const child = spawn("k6", [
       "run",
