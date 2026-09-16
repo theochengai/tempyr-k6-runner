@@ -18,10 +18,19 @@ test("automatic runs are self-contained and use a short-lived execution credenti
 test("runner claims the exact Run before resolving runtime Environment values or executing k6", () => {
   const claim = client.indexOf("/claim");
   const runtimeEnvironment = client.indexOf("/runtime-environment");
+  const prepareArtifact = client.indexOf("prepareEngineExecution(job.engineArtifact");
   const runK6 = client.indexOf("await runK6(");
   assert.ok(claim >= 0, "exact Run claim must exist");
   assert.ok(runtimeEnvironment > claim, "runtime Environment values must be requested after claim");
-  assert.ok(runK6 > runtimeEnvironment, "k6 must start only after runtime Environment resolution");
+  assert.ok(prepareArtifact > runtimeEnvironment, "EngineArtifact must be materialized after runtime Environment authorization");
+  assert.ok(runK6 > prepareArtifact, "k6 must start only after EngineArtifact preparation");
+});
+
+test("runner consumes Tempyr EngineArtifact first while retaining a rollout fallback", () => {
+  assert.match(client, /job\.engineArtifact\s*\?/);
+  assert.match(client, /prepareEngineExecution\(job\.engineArtifact/);
+  assert.match(client, /:\s*await prepareExecution\(job\.executionPlan/);
+  assert.match(client, /materializeK6EngineArtifact/);
 });
 
 test("runner reports terminal state through the authenticated execution job boundary", () => {
